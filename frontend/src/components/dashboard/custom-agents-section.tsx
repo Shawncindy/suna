@@ -43,7 +43,6 @@ export function CustomAgentsSection({ onAgentSelect }: CustomAgentsSectionProps)
   const [installingItemId, setInstallingItemId] = React.useState<string | null>(null);
 
   const handleCardClick = (template: any) => {
-    // Map the template to MarketplaceTemplate format
     const marketplaceTemplate: MarketplaceTemplate = {
       id: template.template_id,
       template_id: template.template_id,
@@ -58,6 +57,9 @@ export function CustomAgentsSection({ onAgentSelect }: CustomAgentsSectionProps)
       profile_image_url: template.profile_image_url,
       avatar: template.avatar,
       avatar_color: template.avatar_color,
+      icon_name: template.icon_name,
+      icon_color: template.icon_color,
+      icon_background: template.icon_background,
       mcp_requirements: template.mcp_requirements || [],
       agentpress_tools: template.agentpress_tools || {},
       model: template.metadata?.model,
@@ -68,7 +70,6 @@ export function CustomAgentsSection({ onAgentSelect }: CustomAgentsSectionProps)
     setIsPreviewOpen(true);
   };
 
-  // Handle clicking Install from the preview dialog - opens the streamlined install dialog
   const handlePreviewInstall = (agent: MarketplaceTemplate) => {
     setIsPreviewOpen(false);
     setSelectedTemplate(agent);
@@ -168,7 +169,7 @@ export function CustomAgentsSection({ onAgentSelect }: CustomAgentsSectionProps)
   }
 
   // No agents found
-  if (!templates || templates.length === 0) {
+  if (!templates || !templates.templates || templates.templates.length === 0) {
     return (
       <div className="w-full">
         <TitleSection />
@@ -184,7 +185,7 @@ export function CustomAgentsSection({ onAgentSelect }: CustomAgentsSectionProps)
       <div className="w-full">
         <TitleSection />
         <div className="grid gap-4 pb-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {templates.slice(0, 4).map((template) => (
+          {templates.templates.slice(0, 4).map((template) => (
             <div
               key={template.template_id}
               className={cn(

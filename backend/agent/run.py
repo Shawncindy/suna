@@ -145,10 +145,32 @@ class ToolManager:
             ('trigger_tool', TriggerTool),
         ]
         
+        logger.debug(f"Registering agent builder tools for agent_id: {agent_id}")
+        logger.debug(f"Disabled tools list: {disabled_tools}")
+        
         for tool_name, tool_class in agent_builder_tools:
             if tool_name not in disabled_tools:
-                self.thread_manager.add_tool(tool_class, thread_manager=self.thread_manager, db_connection=db, agent_id=agent_id)
-                logger.debug(f"Registered {tool_name}")
+                try:
+                    self.thread_manager.add_tool(tool_class, thread_manager=self.thread_manager, db_connection=db, agent_id=agent_id)
+                    logger.debug(f"✅ Registered {tool_name}")
+                except Exception as e:
+                    logger.warning(f"❌ Failed to register {tool_name}: {e}")
+            else:
+                logger.debug(f"⏭️ Skipping {tool_name} - disabled")
+    
+    def _register_suna_specific_tools(self, disabled_tools: List[str]):
+        """Register tools specific to Suna (the default agent)."""
+        if 'agent_creation_tool' not in disabled_tools:
+            from agent.tools.agent_creation_tool import AgentCreationTool
+            from services.supabase import DBConnection
+            
+            db = DBConnection()
+            
+            if hasattr(self, 'account_id') and self.account_id:
+                self.thread_manager.add_tool(AgentCreationTool, thread_manager=self.thread_manager, db_connection=db, account_id=self.account_id)
+                logger.debug("Registered agent_creation_tool for Suna")
+            else:
+                logger.warning("Could not register agent_creation_tool: account_id not available")
     
     def _register_browser_tool(self, disabled_tools: List[str]):
         """Register browser tool."""
@@ -258,7 +280,13 @@ class PromptManager:
                 sample_response = file.read()
             default_system_content = default_system_content + "\n\n <sample_assistant_response>" + sample_response + "</sample_assistant_response>"
         
-        # Check if agent has builder tools enabled - use agent builder prompt
+        # Start with agent's normal system prompt or default
+        if agent_config and agent_config.get('system_prompt'):
+            system_content = agent_config['system_prompt'].strip()
+        else:
+            system_content = default_system_content
+        
+        # Check if agent has builder tools enabled - append the full builder prompt
         if agent_config:
             agentpress_tools = agent_config.get('agentpress_tools', {})
             has_builder_tools = any(
@@ -267,16 +295,12 @@ class PromptManager:
             )
             
             if has_builder_tools:
-                system_content = get_agent_builder_prompt()
-            elif agent_config.get('system_prompt'):
-                system_content = agent_config['system_prompt'].strip()
-            else:
-                system_content = default_system_content
-        else:
-            system_content = default_system_content
+                # Append the full agent builder prompt to the existing system prompt
+                builder_prompt = get_agent_builder_prompt()
+                system_content += f"\n\n{builder_prompt}"
         
         # Add agent knowledge base context if available
-        if client and agent_config and agent_config.get('agent_id'):
+        if agent_config and client and 'agent_id' in agent_config:
             try:
                 logger.debug(f"Retrieving agent knowledge base context for agent {agent_config['agent_id']}")
                 
@@ -379,10 +403,13 @@ class MessageManager:
         self.enable_context_manager = enable_context_manager
     
     async def build_temporary_message(self) -> Optional[dict]:
-        """Build temporary message based on configuration and context."""
         system_message = None
         
-        # Add agent builder system prompt if agent has builder tools enabled
+        if self.agent_config and 'system_prompt' in self.agent_config:
+            system_prompt = self.agent_config['system_prompt']
+            if system_prompt:
+                system_message = system_prompt
+        
         if self.agent_config:
             agentpress_tools = self.agent_config.get('agentpress_tools', {})
             has_builder_tools = any(
@@ -392,15 +419,11 @@ class MessageManager:
             
             if has_builder_tools:
                 from agent.agent_builder_prompt import AGENT_BUILDER_SYSTEM_PROMPT
-                system_message = AGENT_BUILDER_SYSTEM_PROMPT
+                if system_message:
+                    system_message += f"\n\n{AGENT_BUILDER_SYSTEM_PROMPT}"
+                else:
+                    system_message = AGENT_BUILDER_SYSTEM_PROMPT
         
-        # Add agent config system prompt
-        if not system_message and self.agent_config and 'system_prompt' in self.agent_config:
-            system_prompt = self.agent_config['system_prompt']
-            if system_prompt:
-                system_message = system_prompt
-        
-        # Build and return the temporary message if we have content
         if system_message:
             return {
                 "temporary": True,
@@ -436,9 +459,6 @@ class AgentRunner:
         project_data = project.data[0]
         sandbox_info = project_data.get('sandbox', {})
         if not sandbox_info.get('id'):
-            # Sandbox is created lazily by tools when required. Do not fail setup
-            # if no sandbox is present — tools will call `_ensure_sandbox()`
-            # which will create and persist the sandbox metadata when needed.
             logger.debug(f"No sandbox found for project {self.config.project_id}; will create lazily when needed")
     
     async def setup_tools(self):
@@ -454,39 +474,57 @@ class AgentRunner:
         
         # Register all tools with exclusions
         tool_manager.register_all_tools(agent_id=agent_id, disabled_tools=disabled_tools)
+        
+        # Register Suna-specific tools if this is a Suna default agent or no specific agent is configured
+        is_suna_agent = (self.config.agent_config and self.config.agent_config.get('is_suna_default', False)) or (self.config.agent_config is None)
+        logger.debug(f"Agent config check: agent_config={self.config.agent_config is not None}, is_suna_default={is_suna_agent}")
+        
+        if is_suna_agent:
+            logger.debug("Registering Suna-specific tools...")
+            self._register_suna_specific_tools(disabled_tools)
+        else:
+            logger.debug("Not a Suna agent, skipping Suna-specific tool registration")
+    
+    def _register_suna_specific_tools(self, disabled_tools: List[str]):
+        """Register tools specific to Suna (the default agent)."""
+        if 'agent_creation_tool' not in disabled_tools:
+            from agent.tools.agent_creation_tool import AgentCreationTool
+            from services.supabase import DBConnection
+            
+            db = DBConnection()
+            
+            if hasattr(self, 'account_id') and self.account_id:
+                self.thread_manager.add_tool(AgentCreationTool, thread_manager=self.thread_manager, db_connection=db, account_id=self.account_id)
+                logger.debug("Registered agent_creation_tool for Suna")
+            else:
+                logger.warning("Could not register agent_creation_tool: account_id not available")
     
     def _get_disabled_tools_from_config(self) -> List[str]:
-        """Convert agent config to list of disabled tools."""
         disabled_tools = []
         
         if not self.config.agent_config or 'agentpress_tools' not in self.config.agent_config:
-            # No tool configuration - enable all tools by default
             return disabled_tools
         
         raw_tools = self.config.agent_config['agentpress_tools']
         
-        # Handle different formats of tool configuration
         if not isinstance(raw_tools, dict):
-            # If not a dict, assume all tools are enabled
             return disabled_tools
         
-        # Special case: Suna default agents with empty tool config enable all tools
         if self.config.agent_config.get('is_suna_default', False) and not raw_tools:
             return disabled_tools
         
         def is_tool_enabled(tool_name: str) -> bool:
             try:
-                tool_config = raw_tools.get(tool_name, True)  # Default to True (enabled) if not specified
+                tool_config = raw_tools.get(tool_name, True)
                 if isinstance(tool_config, bool):
                     return tool_config
                 elif isinstance(tool_config, dict):
-                    return tool_config.get('enabled', True)  # Default to True (enabled) if not specified
+                    return tool_config.get('enabled', True)
                 else:
-                    return True  # Default to enabled
+                    return True
             except Exception:
-                return True  # Default to enabled
+                return True
         
-        # List of all available tools
         all_tools = [
             'sb_shell_tool', 'sb_files_tool', 'sb_deploy_tool', 'sb_expose_tool',
             'web_search_tool', 'sb_vision_tool', 'sb_presentation_tool', 'sb_image_edit_tool',
@@ -495,12 +533,10 @@ class AgentRunner:
             'workflow_tool', 'trigger_tool'
         ]
         
-        # Add tools that are explicitly disabled
         for tool_name in all_tools:
             if not is_tool_enabled(tool_name):
                 disabled_tools.append(tool_name)
         
-        # Special handling for presentation tools
         if 'sb_presentation_tool' in disabled_tools:
             disabled_tools.extend(['sb_presentation_outline_tool'])
         
