@@ -152,7 +152,7 @@ supabase link --project-ref <ref>  # Link to project
 ### Agent Execution (Daytona)
 - Secure sandbox environments for agent code execution
 - Pre-configured with browser automation, file system access
-- Snapshot: `kortix/suna:0.1.3.7` with supervisord entrypoint
+- Snapshot: `kortix/suna:0.1.3.11` with supervisord entrypoint
 
 ### LLM Integration (LiteLLM)
 - Multi-provider support with unified interface
